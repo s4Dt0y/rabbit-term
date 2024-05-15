@@ -1,6 +1,6 @@
 use nix::errno::Errno;
 use nix::unistd::ForkResult;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 fn main() {
@@ -11,14 +11,15 @@ fn main() {
     set_nonblock(&fd);
 
     loop {
-        let read_res = nix::unistd::read(fd.as_raw_fd(), &mut buf);
-
-        if let Err(Errno::EAGAIN) = read_res {
-            println!("e");
-            continue;
+        let mut temp = vec![0u8; 4096];
+        match nix::unistd::read(fd.as_raw_fd(), &mut temp) {
+            Ok(read_size) => buf.extend_from_slice(&temp[0..read_size]),
+            Err(Errno::EAGAIN) => continue,
+            _ => println!("Error"),
         }
 
-        println!("{}", read_res.unwrap());
+        let print_content = unsafe { std::str::from_utf8_unchecked(&buf) };
+        println!("{}", print_content);
     }
 }
 
@@ -27,19 +28,12 @@ fn spawn_shell() -> Option<OwnedFd> {
         let res = nix::pty::forkpty(None, None).unwrap();
 
         match res.fork_result {
-            ForkResult::Parent { .. } => (),
+            ForkResult::Parent { .. } => println!("WOP"),
             ForkResult::Child => {
+                println!("dop");
                 let shell_name = c"/bin/bash";
-                let args: &[&[u8]] = &[b"bash\0", b"--noprofile\0", b"--norc\0"];
 
-                let args: Vec<&'static CStr> = args
-                    .iter()
-                    .map(|v| {
-                        CStr::from_bytes_with_nul(v).expect("Should always have null terminator")
-                    })
-                    .collect::<Vec<_>>();
-
-                nix::unistd::execvp(shell_name, &args).expect("Could not spawn shell");
+                nix::unistd::execvp::<CString>(shell_name, &[]).expect("Could not spawn shell");
                 std::process::exit(1);
             }
         }
