@@ -1,53 +1,53 @@
-use nix::errno::Errno;
-use nix::unistd::ForkResult;
-use std::ffi::{CStr, CString};
-use std::os::fd::{AsRawFd, OwnedFd};
+use eframe::egui;
+use rb_term::gui::RtGui;
+use rb_term::pty::RtPty;
+
+fn font_definitions() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "Hack".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/hack/Hack-Regular.ttf")),
+    );
+
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .unwrap()
+        .insert(0, "Hack".to_owned());
+
+    fonts
+}
 
 fn main() {
-    let fd = spawn_shell();
-    let mut buf = vec![0, 255];
+    std::env::remove_var("TERM");
 
-    let fd = fd.unwrap();
-    set_nonblock(&fd);
+    let subscriber = tracing_subscriber::FmtSubscriber::new();
 
-    loop {
-        let mut temp = vec![0u8; 4096];
-        match nix::unistd::read(fd.as_raw_fd(), &mut temp) {
-            Ok(read_size) => buf.extend_from_slice(&temp[0..read_size]),
-            Err(Errno::EAGAIN) => continue,
-            _ => println!("Error"),
-        }
+    tracing::subscriber::set_global_default(subscriber).expect("Could not set subscriber");
 
-        let print_content = unsafe { std::str::from_utf8_unchecked(&buf) };
-        println!("{}", print_content);
-    }
-}
+    let shell = "/bin/bash";
+    std::env::set_var("PS1", "$ ");
+    let pty = RtPty::new(shell);
 
-fn spawn_shell() -> Option<OwnedFd> {
-    unsafe {
-        let res = nix::pty::forkpty(None, None).unwrap();
+    let native_options = eframe::NativeOptions::default();
+    let _ = eframe::run_native(
+        "Rabbit Term",
+        native_options,
+        Box::new(move |cc| {
+            let style = egui::Style {
+                visuals: egui::Visuals {
+                    override_text_color: Some(egui::Color32::WHITE),
+                    extreme_bg_color: egui::Color32::BLACK,
+                    ..egui::Visuals::dark()
+                },
 
-        match res.fork_result {
-            ForkResult::Parent { .. } => println!("WOP"),
-            ForkResult::Child => {
-                println!("dop");
-                let shell_name = c"/bin/bash";
+                ..egui::Style::default()
+            };
 
-                nix::unistd::execvp::<CString>(shell_name, &[]).expect("Could not spawn shell");
-                std::process::exit(1);
-            }
-        }
-        Some(res.master)
-    }
-}
-
-fn set_nonblock(fd: &OwnedFd) -> () {
-    let flags = nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)
-        .expect("Failed to set F_GETFL");
-    let mut flags = nix::fcntl::OFlag::from_bits(flags & nix::fcntl::OFlag::O_ACCMODE.bits())
-        .expect("Failed to set 0_ACCMOD");
-    flags.set(nix::fcntl::OFlag::O_NONBLOCK, true);
-
-    nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_SETFL(flags))
-        .expect("Failed to SET_FL");
+            cc.egui_ctx.set_style(style);
+            cc.egui_ctx.set_fonts(font_definitions());
+            Box::new(RtGui::new(cc, pty))
+        }),
+    );
 }
